@@ -1,5 +1,6 @@
 """Signal generator for weather temperature markets using ensemble forecasts."""
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -134,7 +135,7 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
     )
 
 
-async def _observed_floor(market: WeatherMarket) -> Optional[int]:
+async def _observed_floor(market: WeatherMarket) -> Optional[float]:
     """Observed high so far on the settlement day (daily-high markets only)."""
     if market.metric != "high" or not settings.WEATHER_USE_OBSERVED_FLOOR:
         return None
@@ -173,15 +174,17 @@ async def _model_probability(market: WeatherMarket):
                 rem_fc = {m: v[market.target_date.isoformat()] for m, v in rem.items()
                           if market.target_date.isoformat() in v}
                 rem_mu = cal.predict(rem_fc) if rem_fc else None
-                p = max_with_observed_probability(rem_mu, cal.sigma, market.interval, observed)
-                label += f" obs={observed}F rest={'none' if rem_mu is None else f'{rem_mu:.1f}F'}"
+                p = max_with_observed_probability(rem_mu, cal.sigma, market.interval, observed,
+                                                  settings.WEATHER_OBS_UNCERTAINTY_F)
+                label += f" obs={observed:.1f}F rest={'none' if rem_mu is None else f'{rem_mu:.1f}F'}"
                 return p, max(mu, observed), cal.sigma, len(forecasts), label
 
     forecast = await fetch_ensemble_forecast(market.city_key, market.target_date, market.platform)
     if not forecast or not forecast.members(market.metric):
         return None
     shift = settings.WEATHER_HIGH_BIAS_F if market.metric == "high" else 0.0
-    floor = await _observed_floor(market) if market.metric == "high" else None
+    obs = await _observed_floor(market) if market.metric == "high" else None
+    floor = None if obs is None else math.floor(obs)
     p = floored_interval_probability(
         [m + shift for m in forecast.members(market.metric)], market.interval,
         settings.WEATHER_MEMBER_SIGMA_F, floor)

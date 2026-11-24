@@ -243,3 +243,16 @@ def test_polymarket_missing_quote_is_unbuyable():
     }, "slug")
     assert m.yes_price == pytest.approx(0.5)
     assert m.no_price == 1.0   # no YES bid -> NO can't be bought; not 0.75
+
+
+def test_observed_uncertainty_spreads_mass_upward_only():
+    from backend.core.weather_model import max_with_observed_probability as P
+    b49, b51, b47 = TempInterval(49, 50), TempInterval(51, 52), TempInterval(47, 48)
+    # Hourly max exactly 50.0, rest of day much colder
+    sure = P(45.0, 1.5, b49, 50.0, 0.0)
+    unsure = P(45.0, 1.5, b49, 50.0, 0.8)
+    assert sure > 0.99
+    assert 0.4 < unsure < 0.8                      # real chance it was 50.5+ -> 51
+    total = unsure + P(45.0, 1.5, b51, 50.0, 0.8) + P(45.0, 1.5, TempInterval(53, None), 50.0, 0.8)
+    assert total == pytest.approx(1.0, abs=1e-9)
+    assert P(45.0, 1.5, b47, 50.0, 0.8) == 0.0     # never below what was seen

@@ -105,15 +105,7 @@ def floored_interval_probability(
     return min(1.0, num / denom)
 
 
-def max_with_observed_probability(
-    remaining_mu: Optional[float],
-    sigma_f: float,
-    interval: TempInterval,
-    observed: int,
-) -> float:
-    """P(final high in interval) where final = max(observed, R) and
-    R ~ Normal(remaining_mu, sigma) is the highest temperature still to come
-    (rounded to whole degrees). remaining_mu=None means no hours remain."""
+def _max_with_integer_observed(remaining_mu, sigma_f, interval: TempInterval, observed: int) -> float:
     if interval.hi is not None and interval.hi < observed:
         return 0.0
     if remaining_mu is None:
@@ -126,6 +118,42 @@ def max_with_observed_probability(
     if interval.hi is None or lo <= interval.hi:
         p += interval_probability([remaining_mu], TempInterval(lo, interval.hi), sigma_f)
     return min(1.0, p)
+
+
+def max_with_observed_probability(
+    remaining_mu: Optional[float],
+    sigma_f: float,
+    interval: TempInterval,
+    observed: float,
+    observed_sd: float = 0.0,
+) -> float:
+    """P(final high in interval) where final = max(O, R).
+
+    * O is the true high so far. We only see ``observed`` (max of the
+      available readings, e.g. hourly); the true value can be higher by a
+      half-normal amount with scale ``observed_sd`` (never lower).
+    * R ~ Normal(remaining_mu, sigma) is the highest temperature still to
+      come; remaining_mu=None means no hours remain.
+    Everything is rounded to whole degrees, as the official reading is.
+    """
+    if observed_sd <= 0:
+        return _max_with_integer_observed(remaining_mu, sigma_f, interval, _round_half_up(observed))
+    # distribution of the rounded true high so far
+    total, p = 0.0, 0.0
+    k = _round_half_up(observed)
+    while True:
+        lo_edge = max(k - 0.5, observed)
+        hi_edge = k + 0.5
+        if hi_edge > lo_edge:
+            # half-normal CDF: P(|Z|*sd <= x) = 2*Phi(x/sd) - 1
+            w = (2 * _phi((hi_edge - observed) / observed_sd) - 1) - (2 * _phi((lo_edge - observed) / observed_sd) - 1)
+            if w > 0:
+                total += w
+                p += w * _max_with_integer_observed(remaining_mu, sigma_f, interval, k)
+        if hi_edge - observed > 5 * observed_sd:
+            break
+        k += 1
+    return min(1.0, p / total) if total > 0 else 0.0
 
 
 def kalshi_taker_fee(price: float, rate: float = 0.07) -> float:

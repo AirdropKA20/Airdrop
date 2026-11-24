@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
 
 from backend.config import settings
 from backend.core.weather_signals import generate_weather_signal
@@ -22,6 +25,7 @@ async def main() -> None:
     ap.add_argument("--platform", choices=["kalshi", "polymarket", "both"], default="both")
     ap.add_argument("--all", action="store_true", help="show every market, not just actionable ones")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--no-log", action="store_true", help="don't append to data/paper_log.jsonl")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -45,6 +49,8 @@ async def main() -> None:
         if s:
             signals.append(s)
 
+    if not args.no_log:
+        _log(signals)
     signals.sort(key=lambda s: s.edge, reverse=True)
     shown = [s for s in signals if args.all or s.passes_threshold]
     if not shown:
@@ -58,6 +64,27 @@ async def main() -> None:
               f"edge {s.edge:+5.1%}  size ${s.suggested_size:3.0f}  [{s.sources[0]}]")
     print(f"\n{sum(s.passes_threshold for s in signals)} actionable of {len(signals)} signals. "
           "Paper only: nothing was traded.")
+
+
+LOG = Path(__file__).resolve().parents[1] / "data" / "paper_log.jsonl"
+
+
+def _log(signals) -> None:
+    """Append every signal to the paper-trading log (scored by scripts.paper_report)."""
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with LOG.open("a") as f:
+        for s in signals:
+            m = s.market
+            f.write(json.dumps({
+                "ts": now, "platform": m.platform, "market_id": m.market_id, "slug": m.slug,
+                "city": m.city_key, "date": m.target_date.isoformat(),
+                "lo": m.interval.lo, "hi": m.interval.hi,
+                "p": round(s.model_probability, 4), "mu": round(s.ensemble_mean, 2),
+                "sigma": round(s.ensemble_std, 2), "yes_ask": m.yes_price, "no_ask": m.no_price,
+                "direction": s.direction, "edge": round(s.edge, 4),
+                "actionable": s.passes_threshold, "source": s.sources[0],
+            }) + "\n")
 
 
 if __name__ == "__main__":

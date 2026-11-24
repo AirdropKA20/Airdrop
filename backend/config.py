@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     # On the settlement day, condition on the highest temperature already
     # observed at the station (NWS API): the daily high can't end up lower.
     WEATHER_USE_OBSERVED_FLOOR: bool = True
+    # The official high can exceed the highest *reported* reading (it counts
+    # temperatures between reports). Scale (F) of that upward uncertainty.
+    WEATHER_OBS_UNCERTAINTY_F: float = 0.8
     # Kalshi taker fee ~ rate * P * (1 - P) per $1 contract
     KALSHI_FEE_RATE: float = 0.07
 

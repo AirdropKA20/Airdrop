@@ -60,6 +60,19 @@ def quote_at(candles: list, ts: int, max_age_s: int = 6 * 3600):
     return best or (None, None)
 
 
+NOISE_SD = 0.0  # extra forecast error (F) to undo the archive's lookahead; see --noise-sd
+
+
+def _perturb(city: str, day: date, forecasts: dict) -> dict:
+    """Add a shared daily error plus smaller per-model errors (deterministic seed)."""
+    if NOISE_SD <= 0:
+        return forecasts
+    import random
+    rnd = random.Random(f"{city}:{day.isoformat()}")
+    common = rnd.gauss(0, NOISE_SD)
+    return {m: f + common + rnd.gauss(0, NOISE_SD / 2) for m, f in sorted(forecasts.items())}
+
+
 def load_city(city: str):
     cdir = CACHE / city
     fc = json.loads((cdir / "forecasts.json").read_text())
@@ -75,7 +88,7 @@ def load_city(city: str):
             actual = float(ms[0]["expiration_value"])
         except (TypeError, ValueError):
             continue
-        forecasts = {m: fc[m][day.isoformat()] for m in models if day.isoformat() in fc[m]}
+        forecasts = _perturb(city, day, {m: fc[m][day.isoformat()] for m in models if day.isoformat() in fc[m]})
         events.append((day, actual, forecasts, ms))
     return models, events
 
@@ -165,12 +178,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--entry-hour", type=int, default=8, help="local standard time hour")
     ap.add_argument("--entry-day-offset", type=int, default=0, help="0 = settlement day, -1 = day before")
+    ap.add_argument("--noise-sd", type=float, default=0.0,
+                    help="extra forecast error in F (shared daily + half per model) to offset the "
+                         "archive's lookahead; ~1.5 makes errors realistic for next-day forecasts")
     args = ap.parse_args()
+    global NOISE_SD
+    NOISE_SD = args.noise_sd
     thresholds = [0.03, 0.05, 0.08, 0.12, 0.20]
 
     results, mae, n = evaluate(args.entry_hour, args.entry_day_offset, thresholds)
     day = "settlement day" if args.entry_day_offset == 0 else f"day {args.entry_day_offset:+d}"
-    print(f"Entry: {args.entry_hour:02d}:00 local standard time, {day}.  Events: {n}")
+    print(f"Entry: {args.entry_hour:02d}:00 local standard time, {day}.  Extra forecast noise: "
+          f"{args.noise_sd:.1f}F.  Events: {n}")
     print("\nForecast error (MAE of daily high, F):")
     for k, v in mae.items():
         print(f"  {k:9s} {mean(v):.2f}")

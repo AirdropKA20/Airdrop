@@ -40,7 +40,7 @@ class Kalshi:
         self._last = 0.0
 
     def get(self, path: str, params: dict | None = None) -> dict:
-        for attempt in range(8):
+        for attempt in range(10):
             wait = self.min_interval - (time.time() - self._last)
             if wait > 0:
                 time.sleep(wait)
@@ -170,7 +170,12 @@ def main():
         todo = [e for e in events if not (cdir / f"{e}.json").exists()]
         print(f"{city}: {len(events)} events, {len(todo)} to fetch", flush=True)
         for i, ev in enumerate(todo, 1):
-            data = collect_event(k, series, ev, cutoff_ts)
+            try:
+                data = collect_event(k, series, ev, cutoff_ts)
+            except Exception as e:  # skip this day; a rerun will retry it
+                print(f"  {city} {ev}: skipped ({e})", flush=True)
+                time.sleep(30)
+                continue
             (cdir / f"{ev}.json").write_text(json.dumps(data))
             if i % 25 == 0:
                 print(f"  {city} {i}/{len(todo)}", flush=True)

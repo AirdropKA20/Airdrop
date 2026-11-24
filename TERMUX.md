@@ -60,7 +60,21 @@ termux-wake-lock
 while true; do date; python -m scripts.signals; sleep 1800; done
 ```
 
-## 3. Backtest
+## 3. Paper-trade test (the honest test)
+
+Every `scripts.signals` run appends what the model said and the real prices to
+`data/paper_log.jsonl`. Once markets settle, score it:
+
+```bash
+python -m scripts.paper_report               # trades = first actionable signal per market, $10 each
+python -m scripts.paper_report --min-edge 0.12
+```
+
+It reports the win %, P&L and the model's real forecast error (MAE). Unlike the
+backtest, nothing here can see the future. Run the scanner a few times a day
+for 3–4 weeks; under ~100 settled trades the result is mostly luck.
+
+## 4. Backtest
 
 Step 1 downloads a year of Kalshi markets, hourly prices and archived
 forecasts. Kalshi rate-limits it, so it takes **3–4 hours** for 5 cities. It
@@ -78,6 +92,7 @@ Step 2 runs the walk-forward backtest on whatever has been downloaded:
 ```bash
 python -m scripts.backtest.backtest                         # enter 08:00 local time on the day
 python -m scripts.backtest.backtest --entry-hour 20 --entry-day-offset -1   # evening before
+python -m scripts.backtest.backtest --noise-sd 2.0          # add realistic next-day forecast error
 ```
 
 It compares the market, a GFS-only model and the multi-model blend on the

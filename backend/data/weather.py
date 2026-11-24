@@ -304,11 +304,10 @@ async def fetch_nws_observed_temperature(
         return None
 
 
-async def observed_high_so_far(city_key: str, target_date: date, platform: str = "kalshi") -> Optional[int]:
-    """Highest whole-degree F temperature observed so far in the settlement
-    window, or None if the window hasn't started / no data. Rounded down to
-    stay conservative versus the official reading."""
-    import math as _math
+async def observed_high_so_far(city_key: str, target_date: date, platform: str = "kalshi") -> Optional[float]:
+    """Highest temperature (F) in the station's available readings so far in
+    the settlement window, or None if the window hasn't started / no data.
+    The official high can be above this (readings between reports)."""
     from datetime import timezone as _tz
     start_utc, end_utc = settlement_window(city_key, target_date, platform)
     now = datetime.now(_tz.utc)
@@ -317,4 +316,4 @@ async def observed_high_so_far(city_key: str, target_date: date, platform: str =
     obs = await fetch_nws_observed_temperature(city_key, target_date, platform)
     if not obs:
         return None
-    return _math.floor(obs["high"])
+    return float(obs["high"])

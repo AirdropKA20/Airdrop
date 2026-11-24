@@ -59,3 +59,4 @@ htmlcov/
 
 # Backtest data cache
 data/backtest_cache/
+data/paper_log.jsonl
