@@ -1,0 +1,9 @@
+# Minimal dependencies for the signal scanner and backtest (no numpy/pandas/scipy).
+# On Termux install cryptography/pydantic-core from pkg first; see TERMUX.md.
+httpx>=0.26
+pydantic>=2.5
+pydantic-settings>=2.1
+python-dotenv>=1.0
+sqlalchemy>=2.0
+cryptography>=42
+tzdata>=2024.1

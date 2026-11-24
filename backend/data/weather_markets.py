@@ -227,22 +227,26 @@ def _parse_polymarket_weather(
     except (ValueError, IndexError):
         return None
 
-    # outcomePrices are mid/last prices. Prefer the executable order book
-    # quotes when present: buy YES at bestAsk, buy NO at 1 - bestBid.
-    try:
-        best_ask = float(market_data.get("bestAsk") or 0)
-        best_bid = float(market_data.get("bestBid") or 0)
-    except (TypeError, ValueError):
-        best_ask = best_bid = 0.0
-    if 0 < best_ask < 1:
-        yes_price = best_ask
-    if 0 < best_bid < 1:
-        no_price = 1.0 - best_bid
+    # outcomePrices are display (mid/last) prices, not executable. Use the
+    # order book: buy YES at bestAsk, buy NO at 1 - bestBid. A side with no
+    # quote is marked unbuyable (1.0) so it can never show an edge.
+    mid_yes = yes_price
+
+    def _q(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if 0 < v < 1 else None
+
+    best_ask, best_bid = _q(market_data.get("bestAsk")), _q(market_data.get("bestBid"))
+    yes_price = best_ask if best_ask is not None else 1.0
+    no_price = (1.0 - best_bid) if best_bid is not None else 1.0
 
     # Skip resolved markets
     if market_data.get("closed", False):
         return None
-    if yes_price > 0.98 or yes_price < 0.02:
+    if mid_yes > 0.98 or mid_yes < 0.02 or (best_ask is None and best_bid is None):
         return None
 
     volume = float(market_data.get("volume", 0) or 0)

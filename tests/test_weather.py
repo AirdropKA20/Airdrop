@@ -231,3 +231,15 @@ def test_max_with_observed():
     assert ps[3] > ps[1] and sum(ps) == pytest.approx(1.0)
     # No hours left: certain
     assert P(None, 1.5, b[1], 51) == 1.0 and P(None, 1.5, b[2], 51) == 0.0
+
+
+def test_polymarket_missing_quote_is_unbuyable():
+    from backend.data.weather_markets import _parse_polymarket_weather
+    future = date.today() + timedelta(days=2)
+    m = _parse_polymarket_weather({
+        "id": "2",
+        "question": f"Highest temperature in NYC 60-61°F on {future.strftime('%B')} {future.day}, {future.year}?",
+        "outcomePrices": '["0.25", "0.75"]', "bestAsk": "0.5", "bestBid": None,
+    }, "slug")
+    assert m.yes_price == pytest.approx(0.5)
+    assert m.no_price == 1.0   # no YES bid -> NO can't be bought; not 0.75
