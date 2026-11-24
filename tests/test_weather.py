@@ -160,6 +160,8 @@ def test_generate_weather_signal_end_to_end(monkeypatch):
 
     monkeypatch.setattr(weather_signals, "fetch_ensemble_forecast", fake_fetch)
     monkeypatch.setattr(weather_signals.settings, "WEATHER_HIGH_BIAS_F", 0.0)
+    monkeypatch.setattr(weather_signals.settings, "WEATHER_MODEL", "ensemble")
+    monkeypatch.setattr(weather_signals.settings, "WEATHER_USE_OBSERVED_FLOOR", False)
 
     market = WeatherMarket(
         slug="KXHIGHNY-X-B49.5", market_id="KXHIGHNY-X-B49.5", platform="kalshi",
@@ -202,3 +204,30 @@ def test_polymarket_chicago_uses_ohare():
     assert station_for("chicago", "kalshi") == "KMDW"
     assert station_for("chicago", "polymarket") == "KORD"
     assert station_for("nyc", "polymarket") == "KLGA"
+
+
+def test_observed_floor_conditions_distribution():
+    from backend.core.weather_model import floored_interval_probability
+    members = [48.0]
+    buckets = [TempInterval(None, 47), TempInterval(48, 49), TempInterval(50, 51), TempInterval(52, None)]
+    # Already observed 50F: buckets below are impossible, rest renormalised
+    ps = [floored_interval_probability(members, b, 1.5, 50) for b in buckets]
+    assert ps[0] == 0.0 and ps[1] == 0.0
+    assert sum(ps) == pytest.approx(1.0)
+    assert ps[2] > 0.8
+    # No floor -> unchanged
+    assert floored_interval_probability(members, buckets[1], 1.5, None) == pytest.approx(
+        interval_probability(members, buckets[1], 1.5))
+
+
+def test_max_with_observed():
+    from backend.core.weather_model import max_with_observed_probability as P
+    b = [TempInterval(None, 49), TempInterval(50, 51), TempInterval(52, 53), TempInterval(54, None)]
+    # Observed 51 and the rest of the day forecast to peak at 46: high stays 51
+    ps = [P(46.0, 1.5, iv, 51) for iv in b]
+    assert ps[0] == 0.0 and ps[1] > 0.99 and sum(ps) == pytest.approx(1.0)
+    # Rest of day forecast 54: most mass above the observed value
+    ps = [P(54.0, 1.5, iv, 51) for iv in b]
+    assert ps[3] > ps[1] and sum(ps) == pytest.approx(1.0)
+    # No hours left: certain
+    assert P(None, 1.5, b[1], 51) == 1.0 and P(None, 1.5, b[2], 51) == 0.0

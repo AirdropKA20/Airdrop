@@ -155,7 +155,7 @@ def _parse_utc_hour(s: str) -> datetime:
 
 
 def extract_member_extremes(
-    hourly: dict, start_utc: datetime, end_utc: datetime
+    hourly: dict, start_utc: datetime, end_utc: datetime, min_hours: Optional[int] = None
 ) -> Tuple[List[float], List[float]]:
     """From Open-Meteo hourly ensemble output, compute each member's max and
     min over [start_utc, end_utc). Keys look like ``temperature_2m`` (control)
@@ -169,7 +169,7 @@ def extract_member_extremes(
         if not key.startswith("temperature_2m") or not isinstance(values, list):
             continue
         window = [values[i] for i in idx if i < len(values) and values[i] is not None]
-        if len(window) < _MIN_HOURS:
+        if len(window) < (_MIN_HOURS if min_hours is None else min_hours):
             continue
         highs.append(float(max(window)))
         lows.append(float(min(window)))
@@ -302,3 +302,19 @@ async def fetch_nws_observed_temperature(
     except Exception as e:
         logger.warning(f"Failed to fetch NWS observations for {city_key}: {e}")
         return None
+
+
+async def observed_high_so_far(city_key: str, target_date: date, platform: str = "kalshi") -> Optional[int]:
+    """Highest whole-degree F temperature observed so far in the settlement
+    window, or None if the window hasn't started / no data. Rounded down to
+    stay conservative versus the official reading."""
+    import math as _math
+    from datetime import timezone as _tz
+    start_utc, end_utc = settlement_window(city_key, target_date, platform)
+    now = datetime.now(_tz.utc)
+    if now < start_utc or now >= end_utc + timedelta(hours=12):
+        return None
+    obs = await fetch_nws_observed_temperature(city_key, target_date, platform)
+    if not obs:
+        return None
+    return _math.floor(obs["high"])

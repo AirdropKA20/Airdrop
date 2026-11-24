@@ -78,6 +78,56 @@ def interval_probability(
     return total / len(members)
 
 
+def floored_interval_probability(
+    members: Iterable[float],
+    interval: TempInterval,
+    sigma_f: float,
+    observed_floor: Optional[int],
+) -> Optional[float]:
+    """Like interval_probability, but conditioned on the day's high being at
+    least ``observed_floor`` (whole degrees F already observed on the
+    settlement day: the high can't end up lower than that)."""
+    members = [float(m) for m in members]
+    if observed_floor is None:
+        return interval_probability(members, interval, sigma_f)
+    floor_iv = TempInterval(observed_floor, None)
+    denom = interval_probability(members, floor_iv, sigma_f)
+    if interval.hi is not None and interval.hi < observed_floor:
+        return 0.0
+    lo = observed_floor if interval.lo is None else max(interval.lo, observed_floor)
+    num = interval_probability(members, TempInterval(lo, interval.hi), sigma_f)
+    if denom is None or num is None:
+        return None
+    if denom < 1e-9:
+        # Forecast says the high should already be below what was observed:
+        # trust the observation; the high is most likely exactly the floor.
+        return 1.0 if interval.contains(observed_floor) else 0.0
+    return min(1.0, num / denom)
+
+
+def max_with_observed_probability(
+    remaining_mu: Optional[float],
+    sigma_f: float,
+    interval: TempInterval,
+    observed: int,
+) -> float:
+    """P(final high in interval) where final = max(observed, R) and
+    R ~ Normal(remaining_mu, sigma) is the highest temperature still to come
+    (rounded to whole degrees). remaining_mu=None means no hours remain."""
+    if interval.hi is not None and interval.hi < observed:
+        return 0.0
+    if remaining_mu is None:
+        return 1.0 if interval.contains(observed) else 0.0
+    p = 0.0
+    if interval.contains(observed):
+        # R rounds to <= observed -> final high stays at the observed value
+        p += _phi((observed + 0.5 - remaining_mu) / sigma_f)
+    lo = observed + 1 if interval.lo is None else max(interval.lo, observed + 1)
+    if interval.hi is None or lo <= interval.hi:
+        p += interval_probability([remaining_mu], TempInterval(lo, interval.hi), sigma_f)
+    return min(1.0, p)
+
+
 def kalshi_taker_fee(price: float, rate: float = 0.07) -> float:
     """Approximate Kalshi taker fee per $1 contract: rate * P * (1 - P).
     (Kalshi rounds the total fee up to the cent per order; ignored here.)"""

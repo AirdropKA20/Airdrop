@@ -1,13 +1,13 @@
 """Signal generator for weather temperature markets using ensemble forecasts."""
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from backend.config import settings
 from backend.core.signals import calculate_kelly_size
-from backend.core.weather_model import kalshi_taker_fee
-from backend.data.weather import fetch_ensemble_forecast, EnsembleForecast, CITY_CONFIG
+from backend.core.weather_model import floored_interval_probability, kalshi_taker_fee, max_with_observed_probability
+from backend.data.weather import fetch_ensemble_forecast, observed_high_so_far, EnsembleForecast, CITY_CONFIG
 from backend.data.weather_markets import WeatherMarket, fetch_polymarket_weather_markets
 from backend.models.database import SessionLocal, Signal
 
@@ -60,14 +60,10 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
     if market.interval is None:
         return None
 
-    forecast = await fetch_ensemble_forecast(market.city_key, market.target_date, market.platform)
-    if not forecast or not forecast.members(market.metric):
+    model_info = await _model_probability(market)
+    if model_info is None:
         return None
-
-    shift = settings.WEATHER_HIGH_BIAS_F if market.metric == "high" else 0.0
-    raw_prob = forecast.probability_in(market.interval, market.metric, settings.WEATHER_MEMBER_SIGMA_F, shift)
-    if raw_prob is None:
-        return None
+    raw_prob, mean_val, std_val, n_members, source = model_info
 
     # Clip extreme probabilities (ensemble can be unanimous but don't bet 100%)
     model_yes_prob = max(0.02, min(0.98, raw_prob))
@@ -107,10 +103,6 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
         suggested_size = 0.0
     suggested_size = min(suggested_size, settings.WEATHER_MAX_TRADE_SIZE)
 
-    # Ensemble stats for display
-    mean_val = (forecast.mean_high + shift) if market.metric == "high" else forecast.mean_low
-    std_val = forecast.std_high if market.metric == "high" else forecast.std_low
-
     filter_status = "ACTIONABLE" if edge >= settings.WEATHER_MIN_EDGE_THRESHOLD else "FILTERED"
     filter_note = (
         f" [entry {entry_price:.0%} > {settings.WEATHER_MAX_ENTRY_PRICE:.0%}]"
@@ -119,8 +111,8 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
 
     reasoning = (
         f"[{filter_status}]{filter_note} "
-        f"{market.city_name} ({forecast.station}) {market.metric} {market.interval.label()} on {market.target_date} | "
-        f"Ensemble: {mean_val:.1f}F +/- {std_val:.1f}F ({forecast.num_members} members) | "
+        f"{market.city_name} {market.metric} {market.interval.label()} on {market.target_date} | "
+        f"{source}: {mean_val:.1f}F +/- {std_val:.1f}F | "
         f"Model YES: {model_yes_prob:.0%} vs YES ask {market.yes_price:.0%} / NO ask {market.no_price:.0%} | "
         f"Edge{' (after fees)' if fee_rate else ''}: {edge:+.1%} -> {direction.upper()} @ {entry_price:.0%}"
     )
@@ -134,12 +126,70 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
         confidence=confidence,
         kelly_fraction=suggested_size / bankroll if bankroll > 0 else 0,
         suggested_size=suggested_size,
-        sources=[f"open_meteo_gfs_ensemble_{forecast.num_members}m@{forecast.station}"],
+        sources=[source],
         reasoning=reasoning,
         ensemble_mean=mean_val,
         ensemble_std=std_val,
-        ensemble_members=forecast.num_members,
+        ensemble_members=n_members,
     )
+
+
+async def _observed_floor(market: WeatherMarket) -> Optional[int]:
+    """Observed high so far on the settlement day (daily-high markets only)."""
+    if market.metric != "high" or not settings.WEATHER_USE_OBSERVED_FLOOR:
+        return None
+    try:
+        return await observed_high_so_far(market.city_key, market.target_date, market.platform)
+    except Exception as e:
+        logger.debug(f"Observed floor unavailable for {market.city_key}: {e}")
+        return None
+
+
+async def _model_probability(market: WeatherMarket):
+    """Return (probability, mean, std, n_inputs, source_label) or None.
+
+    WEATHER_MODEL = "blend" (default): multi-model blend calibrated on recent
+    settled results (backend.core.blend). Falls back to the GFS ensemble when
+    calibration data is unavailable or the market is a daily low.
+    """
+    if settings.WEATHER_MODEL == "blend" and market.metric == "high":
+        from backend.data.calibration_history import fetch_model_highs, get_calibration
+        cal = await get_calibration(market.city_key, market.target_date, market.platform)
+        if cal is not None and cal.n >= settings.WEATHER_BLEND_MIN_HISTORY:
+            fc = await fetch_model_highs(market.city_key, market.target_date, market.target_date, market.platform)
+            forecasts = {m: v[market.target_date.isoformat()] for m, v in fc.items()
+                         if market.target_date.isoformat() in v}
+            mu = cal.predict(forecasts)
+            if mu is not None:
+                label = f"blend[{len(forecasts)} models, n={cal.n}]"
+                observed = await _observed_floor(market)
+                if observed is None:
+                    return cal.probability(forecasts, market.interval), mu, cal.sigma, len(forecasts), label
+                # Settlement day under way: final high = max(observed so far,
+                # highest temperature still to come).
+                now = datetime.now(timezone.utc)
+                rem = await fetch_model_highs(market.city_key, market.target_date, market.target_date,
+                                              market.platform, after_utc=now)
+                rem_fc = {m: v[market.target_date.isoformat()] for m, v in rem.items()
+                          if market.target_date.isoformat() in v}
+                rem_mu = cal.predict(rem_fc) if rem_fc else None
+                p = max_with_observed_probability(rem_mu, cal.sigma, market.interval, observed)
+                label += f" obs={observed}F rest={'none' if rem_mu is None else f'{rem_mu:.1f}F'}"
+                return p, max(mu, observed), cal.sigma, len(forecasts), label
+
+    forecast = await fetch_ensemble_forecast(market.city_key, market.target_date, market.platform)
+    if not forecast or not forecast.members(market.metric):
+        return None
+    shift = settings.WEATHER_HIGH_BIAS_F if market.metric == "high" else 0.0
+    floor = await _observed_floor(market) if market.metric == "high" else None
+    p = floored_interval_probability(
+        [m + shift for m in forecast.members(market.metric)], market.interval,
+        settings.WEATHER_MEMBER_SIGMA_F, floor)
+    if p is None:
+        return None
+    mean_val = (forecast.mean_high + shift) if market.metric == "high" else forecast.mean_low
+    std_val = forecast.std_high if market.metric == "high" else forecast.std_low
+    return p, mean_val, std_val, forecast.num_members, f"gfs_ensemble@{forecast.station}"
 
 
 async def scan_for_weather_signals() -> List[WeatherTradingSignal]:

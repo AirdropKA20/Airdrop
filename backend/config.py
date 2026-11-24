@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     # ran 1.4-2.5F cold vs settled Kalshi highs (coarse grid + hourly sampling
     # misses the peak). Re-measure periodically; lows are not corrected.
     WEATHER_HIGH_BIAS_F: float = 2.0
+    # "blend" = multi-model blend calibrated on recent settled results
+    # (backend/core/blend.py); "ensemble" = GFS ensemble only.
+    WEATHER_MODEL: str = "blend"
+    WEATHER_BLEND_MIN_HISTORY: int = 14  # settled days needed before using the blend
+    # On the settlement day, condition on the highest temperature already
+    # observed at the station (NWS API): the daily high can't end up lower.
+    WEATHER_USE_OBSERVED_FLOOR: bool = True
     # Kalshi taker fee ~ rate * P * (1 - P) per $1 contract
     KALSHI_FEE_RATE: float = 0.07
 
