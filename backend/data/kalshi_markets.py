@@ -102,10 +102,7 @@ async def fetch_kalshi_weather_markets(
     Queries the KXHIGH{city} series for each configured city,
     handles cursor-based pagination, and returns WeatherMarket objects.
     """
-    if not kalshi_credentials_present():
-        return []
-
-    client = KalshiClient()
+    client = KalshiClient()  # market data is public; keys are optional
     markets: List[WeatherMarket] = []
     today = date.today()
 
@@ -152,7 +149,7 @@ async def fetch_kalshi_weather_markets(
                     if yes_price > 0.98 or yes_price < 0.02:
                         continue
 
-                    volume = float(m.get("volume", 0) or 0)
+                    volume = float(m.get("volume_fp") or m.get("volume") or 0)
 
                     markets.append(WeatherMarket(
                         slug=ticker,

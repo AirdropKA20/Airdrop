@@ -73,7 +73,11 @@ class KalshiClient:
         """
         full_path = f"/trade-api/v2{path}"
         url = f"{BASE_URL}{path}"
-        headers = self._sign_request("GET", full_path)
+        # Market data endpoints are public; only sign when keys are configured.
+        if kalshi_credentials_present():
+            headers = self._sign_request("GET", full_path)
+        else:
+            headers = {"Accept": "application/json"}
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(url, headers=headers, params=params)

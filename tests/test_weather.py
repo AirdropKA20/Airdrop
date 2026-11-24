@@ -159,6 +159,7 @@ def test_generate_weather_signal_end_to_end(monkeypatch):
         return forecast
 
     monkeypatch.setattr(weather_signals, "fetch_ensemble_forecast", fake_fetch)
+    monkeypatch.setattr(weather_signals.settings, "WEATHER_HIGH_BIAS_F", 0.0)
 
     market = WeatherMarket(
         slug="KXHIGHNY-X-B49.5", market_id="KXHIGHNY-X-B49.5", platform="kalshi",
@@ -172,3 +173,32 @@ def test_generate_weather_signal_end_to_end(monkeypatch):
     assert 0.3 < sig.model_probability < 0.45
     assert sig.edge == pytest.approx(sig.model_probability - 0.20 - kalshi_taker_fee(0.20), abs=1e-9)
     assert sig.suggested_size > 0
+
+
+def test_high_bias_shift_moves_probability():
+    from backend.data.weather import EnsembleForecast
+    f = EnsembleForecast(city_key="nyc", city_name="NYC", target_date=date.today(),
+                         member_highs=[48.0] * 31, member_lows=[40.0] * 31)
+    iv = TempInterval(49, 50)
+    assert f.probability_in(iv, "high", 1.0, shift_f=2.0) > f.probability_in(iv, "high", 1.0)
+
+
+def test_polymarket_event_slug():
+    from backend.data.weather_markets import _polymarket_event_slug
+    assert _polymarket_event_slug("nyc", date(2026, 11, 24)) == "highest-temperature-in-nyc-on-november-24-2026"
+    assert _polymarket_event_slug("los_angeles", date(2026, 12, 1)) == "highest-temperature-in-los-angeles-on-december-1-2026"
+
+
+def test_polymarket_live_question_format():
+    from backend.data.weather_markets import _parse_weather_market_title
+    p = _parse_weather_market_title("Will the highest temperature in New York City be between 47-48°F on November 24?")
+    assert p["city_key"] == "nyc" and p["interval"] == TempInterval(47, 48) and p["metric"] == "high"
+    p = _parse_weather_market_title("Will the highest temperature in New York City be 58°F or higher on November 24?")
+    assert p["interval"] == TempInterval(58, None)
+
+
+def test_polymarket_chicago_uses_ohare():
+    from backend.data.weather import station_for
+    assert station_for("chicago", "kalshi") == "KMDW"
+    assert station_for("chicago", "polymarket") == "KORD"
+    assert station_for("nyc", "polymarket") == "KLGA"

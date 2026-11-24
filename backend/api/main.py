@@ -704,11 +704,9 @@ async def get_weather_markets():
         # Also fetch Kalshi markets if enabled
         if settings.KALSHI_ENABLED:
             try:
-                from backend.data.kalshi_client import kalshi_credentials_present
                 from backend.data.kalshi_markets import fetch_kalshi_weather_markets
-                if kalshi_credentials_present():
-                    kalshi_markets = await fetch_kalshi_weather_markets(city_keys)
-                    markets.extend(kalshi_markets)
+                kalshi_markets = await fetch_kalshi_weather_markets(city_keys)
+                markets.extend(kalshi_markets)
             except Exception:
                 pass
 

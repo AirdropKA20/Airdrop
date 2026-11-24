@@ -202,10 +202,7 @@ async def check_weather_settlement(trade: Trade) -> Tuple[bool, Optional[float],
 async def _fetch_kalshi_resolution(ticker: str) -> Tuple[bool, Optional[float]]:
     """Fetch resolution status for a Kalshi market."""
     try:
-        from backend.data.kalshi_client import KalshiClient, kalshi_credentials_present
-
-        if not kalshi_credentials_present():
-            return False, None
+        from backend.data.kalshi_client import KalshiClient
 
         client = KalshiClient()
         data = await client.get_market(ticker)

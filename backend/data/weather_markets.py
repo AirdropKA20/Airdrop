@@ -3,7 +3,7 @@ import httpx
 import re
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 from backend.data.temp_intervals import TempInterval, parse_metric, parse_temp_interval
@@ -135,67 +135,55 @@ def _extract_date(text: str) -> Optional[date]:
     return None
 
 
-async def fetch_polymarket_weather_markets(city_keys: Optional[List[str]] = None) -> List[WeatherMarket]:
+def _polymarket_event_slug(city_key: str, d: date) -> str:
+    """Daily temperature events: highest-temperature-in-nyc-on-november-24-2026."""
+    from backend.data.weather import CITY_CONFIG
+    city = CITY_CONFIG[city_key]
+    city_slug = city.get("polymarket_slug", city_key.replace("_", "-"))
+    return f"highest-temperature-in-{city_slug}-on-{d.strftime('%B').lower()}-{d.day}-{d.year}"
+
+
+async def fetch_polymarket_weather_markets(
+    city_keys: Optional[List[str]] = None, days_ahead: int = 2
+) -> List[WeatherMarket]:
     """
-    Search Polymarket for weather temperature markets.
-    Searches for temperature/weather events and parses their titles.
+    Fetch Polymarket daily highest-temperature events by slug for each city,
+    from today through ``days_ahead`` days out. (The gamma ``tag`` filter the
+    original code used is ignored by the API and returned unrelated events.)
     """
-    markets = []
+    from backend.data.weather import CITY_CONFIG
+
+    markets: List[WeatherMarket] = []
+    cities = [c for c in (city_keys or list(CITY_CONFIG)) if c in CITY_CONFIG]
+    today = date.today()
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            # Search for weather/temperature events
-            for search_term in ["temperature", "weather high", "weather low"]:
-                try:
-                    response = await client.get(
-                        "https://gamma-api.polymarket.com/events",
-                        params={
-                            "closed": "false",
-                            "limit": 100,
-                            "tag": "Weather",
-                        }
-                    )
-                    response.raise_for_status()
-                    events = response.json()
+            for city_key in cities:
+                for offset in range(days_ahead + 1):
+                    slug = _polymarket_event_slug(city_key, today + timedelta(days=offset))
+                    try:
+                        response = await client.get(
+                            "https://gamma-api.polymarket.com/events", params={"slug": slug}
+                        )
+                        response.raise_for_status()
+                        events = response.json()
+                    except Exception as e:
+                        logger.debug(f"Polymarket event fetch failed for {slug}: {e}")
+                        continue
 
                     for event in events:
-                        event_slug = event.get("slug", "")
+                        if event.get("closed"):
+                            continue
                         for market_data in event.get("markets", []):
-                            market = _parse_polymarket_weather(market_data, event_slug, city_keys)
+                            market = _parse_polymarket_weather(market_data, slug, [city_key])
                             if market:
                                 markets.append(market)
-
-                except Exception as e:
-                    logger.debug(f"Weather market search for '{search_term}' failed: {e}")
-
-            # Also try slug-based search for known patterns
-            for slug_pattern in ["weather", "temperature", "temp-"]:
-                try:
-                    response = await client.get(
-                        "https://gamma-api.polymarket.com/events",
-                        params={
-                            "closed": "false",
-                            "limit": 100,
-                            "slug_contains": slug_pattern,
-                        }
-                    )
-                    response.raise_for_status()
-                    events = response.json()
-
-                    for event in events:
-                        event_slug = event.get("slug", "")
-                        for market_data in event.get("markets", []):
-                            market = _parse_polymarket_weather(market_data, event_slug, city_keys)
-                            if market and not any(m.market_id == market.market_id for m in markets):
-                                markets.append(market)
-
-                except Exception as e:
-                    logger.debug(f"Weather slug search for '{slug_pattern}' failed: {e}")
 
     except Exception as e:
         logger.warning(f"Failed to fetch weather markets: {e}")
 
-    logger.info(f"Found {len(markets)} weather temperature markets")
+    logger.info(f"Found {len(markets)} Polymarket weather temperature markets")
     return markets
 
 

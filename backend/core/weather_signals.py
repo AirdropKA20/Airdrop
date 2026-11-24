@@ -64,7 +64,8 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
     if not forecast or not forecast.members(market.metric):
         return None
 
-    raw_prob = forecast.probability_in(market.interval, market.metric, settings.WEATHER_MEMBER_SIGMA_F)
+    shift = settings.WEATHER_HIGH_BIAS_F if market.metric == "high" else 0.0
+    raw_prob = forecast.probability_in(market.interval, market.metric, settings.WEATHER_MEMBER_SIGMA_F, shift)
     if raw_prob is None:
         return None
 
@@ -107,7 +108,7 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
     suggested_size = min(suggested_size, settings.WEATHER_MAX_TRADE_SIZE)
 
     # Ensemble stats for display
-    mean_val = forecast.mean_high if market.metric == "high" else forecast.mean_low
+    mean_val = (forecast.mean_high + shift) if market.metric == "high" else forecast.mean_low
     std_val = forecast.std_high if market.metric == "high" else forecast.std_low
 
     filter_status = "ACTIONABLE" if edge >= settings.WEATHER_MIN_EDGE_THRESHOLD else "FILTERED"
@@ -165,12 +166,10 @@ async def scan_for_weather_signals() -> List[WeatherTradingSignal]:
     # Kalshi
     if settings.KALSHI_ENABLED:
         try:
-            from backend.data.kalshi_client import kalshi_credentials_present
             from backend.data.kalshi_markets import fetch_kalshi_weather_markets
-            if kalshi_credentials_present():
-                kalshi_markets = await fetch_kalshi_weather_markets(city_keys)
-                markets.extend(kalshi_markets)
-                logger.info(f"Kalshi: {len(kalshi_markets)} weather markets")
+            kalshi_markets = await fetch_kalshi_weather_markets(city_keys)
+            markets.extend(kalshi_markets)
+            logger.info(f"Kalshi: {len(kalshi_markets)} weather markets")
         except Exception as e:
             logger.error(f"Failed to fetch Kalshi weather markets: {e}")
 

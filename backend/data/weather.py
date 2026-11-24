@@ -33,7 +33,9 @@ STATIONS: Dict[str, dict] = {
 #   polymarket_station - station Polymarket resolves on, when different
 #   lst_utc_offset     - local *standard* time offset (NWS climate day)
 #   tz                 - IANA zone (Polymarket / Weather Underground civil day)
-# Settlement sources change: confirm against each contract's rules before trading.
+# Verified against live contract rules on 2026-11-24 (Kalshi rules_primary
+# CLINYC/CLIMDW/CLIMIA/CLILAX/CLIDEN; Polymarket event descriptions).
+# Settlement sources change: re-check before trading.
 CITY_CONFIG: Dict[str, dict] = {
     "nyc": {
         "name": "New York City",
@@ -41,10 +43,12 @@ CITY_CONFIG: Dict[str, dict] = {
         "polymarket_station": "KLGA",
         "lst_utc_offset": -5,
         "tz": "America/New_York",
+        "polymarket_slug": "nyc",
     },
     "chicago": {
         "name": "Chicago",
         "station": "KMDW",
+        "polymarket_station": "KORD",
         "lst_utc_offset": -6,
         "tz": "America/Chicago",
     },
@@ -126,9 +130,12 @@ class EnsembleForecast:
     def members(self, metric: str) -> List[float]:
         return self.member_highs if metric == "high" else self.member_lows
 
-    def probability_in(self, interval: TempInterval, metric: str, sigma_f: float) -> Optional[float]:
-        """Probability the official whole-degree high/low falls in ``interval``."""
-        return interval_probability(self.members(metric), interval, sigma_f)
+    def probability_in(
+        self, interval: TempInterval, metric: str, sigma_f: float, shift_f: float = 0.0
+    ) -> Optional[float]:
+        """Probability the official whole-degree high/low falls in ``interval``.
+        ``shift_f`` is a bias correction added to every member."""
+        return interval_probability([m + shift_f for m in self.members(metric)], interval, sigma_f)
 
 
 # Simple cache: (station, target_date, platform) -> (timestamp, EnsembleForecast)

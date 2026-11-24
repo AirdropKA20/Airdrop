@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # 31-member distribution over 1-2F buckets and widens the raw GFS
     # ensemble, which is typically under-dispersed. Tune via backtest.
     WEATHER_MEMBER_SIGMA_F: float = 2.0
+    # Degrees F added to every GFS ensemble member's daily HIGH before pricing.
+    # Live check (Nov 2026, 14 station-days across 5 cities): the raw ensemble
+    # ran 1.4-2.5F cold vs settled Kalshi highs (coarse grid + hourly sampling
+    # misses the peak). Re-measure periodically; lows are not corrected.
+    WEATHER_HIGH_BIAS_F: float = 2.0
     # Kalshi taker fee ~ rate * P * (1 - P) per $1 contract
     KALSHI_FEE_RATE: float = 0.07
 
