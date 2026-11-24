@@ -5,6 +5,7 @@ from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from backend.data.kalshi_client import KalshiClient, kalshi_credentials_present
+from backend.data.temp_intervals import TempInterval, interval_from_kalshi
 from backend.data.weather_markets import WeatherMarket
 
 logger = logging.getLogger("trading_bot")
@@ -33,48 +34,63 @@ MONTH_ABBR = {
 }
 
 
-def _parse_kalshi_ticker(ticker: str, city_key: str) -> Optional[dict]:
-    """
-    Parse a Kalshi bracket ticker into market parameters.
+_DATE_RE = re.compile(r"^[A-Z]+-(\d{2})([A-Z]{3})(\d{2})-")
 
-    Format: KXHIGHNY-26MAR01-B45.5
-      - 26MAR01 = 2026-03-01
-      - B45.5 = bracket boundary at 45.5°F (above)
-      - T45.5 would be "at or below" (top boundary)
-    """
-    # Match: SERIES-YYMONDD-B/Tnn.n
-    match = re.match(
-        r'^[A-Z]+-(\d{2})([A-Z]{3})(\d{2})-([BT])([\d.]+)$',
-        ticker,
-    )
+
+def _parse_kalshi_date(ticker: str) -> Optional[date]:
+    """KXHIGHNY-26MAR01-B45.5 -> 2026-03-01."""
+    match = _DATE_RE.match(ticker)
     if not match:
         return None
-
-    yy = int(match.group(1))
-    mon_str = match.group(2)
-    dd = int(match.group(3))
-    boundary_type = match.group(4)
-    threshold = float(match.group(5))
-
-    month = MONTH_ABBR.get(mon_str)
+    month = MONTH_ABBR.get(match.group(2))
     if not month:
         return None
-
-    year = 2000 + yy
     try:
-        target_date = date(year, month, dd)
+        return date(2000 + int(match.group(1)), month, int(match.group(3)))
     except ValueError:
         return None
 
-    # B = bottom boundary → "above" threshold; T = top boundary → "below" threshold
-    direction = "above" if boundary_type == "B" else "below"
 
-    return {
-        "target_date": target_date,
-        "threshold_f": threshold,
-        "metric": "high",
-        "direction": direction,
-    }
+def _kalshi_price(m: dict, field: str) -> Optional[float]:
+    """Read a Kalshi quote as a 0-1 probability.
+
+    Supports both the ``*_dollars`` string fields (e.g. "0.4200") and the
+    older integer-cent fields (e.g. 42). Returns None when absent / zero.
+    """
+    dollars = m.get(f"{field}_dollars")
+    if dollars not in (None, ""):
+        try:
+            v = float(dollars)
+            return v if 0 < v < 1 else None
+        except (TypeError, ValueError):
+            pass
+    cents = m.get(field)
+    if cents in (None, ""):
+        return None
+    try:
+        v = float(cents) / 100.0
+    except (TypeError, ValueError):
+        return None
+    return v if 0 < v < 1 else None
+
+
+def kalshi_entry_prices(m: dict) -> Optional[tuple]:
+    """Executable (yes_cost, no_cost) for buying each side now.
+
+    Buying NO at the NO ask is equivalent to selling YES at the YES bid, so
+    no_cost falls back to 1 - yes_bid (and vice versa). Never uses last trade
+    price: that isn't a price you can actually get.
+    """
+    yes_ask = _kalshi_price(m, "yes_ask")
+    no_ask = _kalshi_price(m, "no_ask")
+    yes_bid = _kalshi_price(m, "yes_bid")
+    no_bid = _kalshi_price(m, "no_bid")
+
+    yes_cost = yes_ask if yes_ask is not None else (1.0 - no_bid if no_bid is not None else None)
+    no_cost = no_ask if no_ask is not None else (1.0 - yes_bid if yes_bid is not None else None)
+    if yes_cost is None or no_cost is None:
+        return None
+    return yes_cost, no_cost
 
 
 async def fetch_kalshi_weather_markets(
@@ -118,23 +134,21 @@ async def fetch_kalshi_weather_markets(
 
                 for m in raw_markets:
                     ticker = m.get("ticker", "")
-                    parsed = _parse_kalshi_ticker(ticker, city_key)
-                    if not parsed:
+                    target_date = _parse_kalshi_date(ticker)
+                    if not target_date or target_date < today:
                         continue
 
-                    if parsed["target_date"] < today:
+                    interval = interval_from_kalshi(m)
+                    if interval is None:
+                        logger.debug(f"Skipping Kalshi market with unknown strike: {ticker}")
                         continue
 
-                    yes_price = (m.get("yes_ask") or 0) / 100.0
-                    no_price = (m.get("no_ask") or 0) / 100.0
+                    prices = kalshi_entry_prices(m)
+                    if prices is None:
+                        continue  # one-sided / empty book
+                    yes_price, no_price = prices
 
-                    # Fallback to last/mid prices
-                    if yes_price <= 0:
-                        yes_price = (m.get("last_price") or 50) / 100.0
-                    if no_price <= 0:
-                        no_price = 1.0 - yes_price
-
-                    # Skip fully resolved or illiquid
+                    # Skip effectively resolved markets
                     if yes_price > 0.98 or yes_price < 0.02:
                         continue
 
@@ -147,13 +161,14 @@ async def fetch_kalshi_weather_markets(
                         title=m.get("title", ticker),
                         city_key=city_key,
                         city_name=city_name,
-                        target_date=parsed["target_date"],
-                        threshold_f=parsed["threshold_f"],
-                        metric=parsed["metric"],
-                        direction=parsed["direction"],
+                        target_date=target_date,
+                        threshold_f=interval.threshold,
+                        metric="high",  # KXHIGH* series are daily highs
+                        direction=interval.direction,
                         yes_price=yes_price,
                         no_price=no_price,
                         volume=volume,
+                        interval=interval,
                     ))
 
                 # Handle pagination

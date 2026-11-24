@@ -255,7 +255,7 @@ async def weather_scan_and_trade_job():
 
                 trade = Trade(
                     market_ticker=signal.market.market_id,
-                    platform="polymarket",
+                    platform=signal.market.platform,
                     event_slug=signal.market.slug,
                     market_type="weather",
                     direction=signal.direction,
@@ -285,7 +285,7 @@ async def weather_scan_and_trade_job():
                 log_event("trade",
                     f"WX {signal.market.city_name}: {signal.direction.upper()} "
                     f"${trade_size:.0f} @ {entry_price:.0%} | "
-                    f"{signal.market.metric} {signal.market.direction} {signal.market.threshold_f:.0f}F",
+                    f"{signal.market.metric} {signal.market.interval.label()}",
                     {
                         "slug": signal.market.slug,
                         "direction": signal.direction,

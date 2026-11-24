@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import List, Optional
 
+from backend.data.temp_intervals import TempInterval, parse_metric, parse_temp_interval
+
 logger = logging.getLogger("trading_bot")
 
 # Map city names/variants found in market titles to our city keys
@@ -16,7 +18,6 @@ CITY_ALIASES = {
     "chicago": "chicago",
     "miami": "miami",
     "los angeles": "los_angeles",
-    "la": "los_angeles",
     "denver": "denver",
 }
 
@@ -40,13 +41,14 @@ class WeatherMarket:
     city_key: str
     city_name: str
     target_date: date
-    threshold_f: float       # Temperature threshold in Fahrenheit
+    threshold_f: float       # Representative temperature (display only)
     metric: str              # "high" or "low"
-    direction: str           # "above" or "below"
-    yes_price: float         # Price of YES outcome (0-1)
-    no_price: float          # Price of NO outcome (0-1)
+    direction: str           # "above", "below", "between" or "exact" (display only)
+    yes_price: float         # Cost to buy YES now (best ask, 0-1)
+    no_price: float          # Cost to buy NO now (best ask, 0-1)
     volume: float = 0.0
     closed: bool = False
+    interval: Optional[TempInterval] = None  # Settlement interval (authoritative)
 
 
 def _parse_weather_market_title(title: str) -> Optional[dict]:
@@ -66,11 +68,12 @@ def _parse_weather_market_title(title: str) -> Optional[dict]:
     if not any(kw in title_lower for kw in ["temperature", "temp", "°f", "degrees", "high", "low"]):
         return None
 
-    # Extract city
+    # Extract city. Word boundaries stop short aliases matching inside other
+    # words (the old bare "la" alias matched "atlanta" and "dallas").
     city_key = None
     city_name = None
     for alias, key in sorted(CITY_ALIASES.items(), key=lambda x: -len(x[0])):
-        if alias in title_lower:
+        if re.search(rf"\b{re.escape(alias)}\b", title_lower):
             city_key = key
             from backend.data.weather import CITY_CONFIG
             city_name = CITY_CONFIG[key]["name"]
@@ -79,25 +82,10 @@ def _parse_weather_market_title(title: str) -> Optional[dict]:
     if not city_key:
         return None
 
-    # Extract threshold temperature
-    temp_match = re.search(r'(\d+)\s*°?\s*f', title_lower)
-    if not temp_match:
-        temp_match = re.search(r'(\d+)\s*degrees', title_lower)
-    if not temp_match:
+    interval = parse_temp_interval(title_lower)
+    if interval is None:
         return None
-    threshold_f = float(temp_match.group(1))
 
-    # Determine metric (high vs low)
-    metric = "high"  # default
-    if "low" in title_lower:
-        metric = "low"
-
-    # Determine direction
-    direction = "above"  # default
-    if any(kw in title_lower for kw in ["below", "under", "less than", "drop below"]):
-        direction = "below"
-
-    # Extract date
     target_date = _extract_date(title_lower)
     if not target_date:
         return None
@@ -105,9 +93,10 @@ def _parse_weather_market_title(title: str) -> Optional[dict]:
     return {
         "city_key": city_key,
         "city_name": city_name,
-        "threshold_f": threshold_f,
-        "metric": metric,
-        "direction": direction,
+        "interval": interval,
+        "threshold_f": interval.threshold,
+        "metric": parse_metric(title_lower),
+        "direction": interval.direction,
         "target_date": target_date,
     }
 
@@ -250,6 +239,18 @@ def _parse_polymarket_weather(
     except (ValueError, IndexError):
         return None
 
+    # outcomePrices are mid/last prices. Prefer the executable order book
+    # quotes when present: buy YES at bestAsk, buy NO at 1 - bestBid.
+    try:
+        best_ask = float(market_data.get("bestAsk") or 0)
+        best_bid = float(market_data.get("bestBid") or 0)
+    except (TypeError, ValueError):
+        best_ask = best_bid = 0.0
+    if 0 < best_ask < 1:
+        yes_price = best_ask
+    if 0 < best_bid < 1:
+        no_price = 1.0 - best_bid
+
     # Skip resolved markets
     if market_data.get("closed", False):
         return None
@@ -272,4 +273,5 @@ def _parse_polymarket_weather(
         yes_price=yes_price,
         no_price=no_price,
         volume=volume,
+        interval=parsed["interval"],
     )

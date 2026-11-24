@@ -8,6 +8,16 @@ A multi-strategy trading bot that identifies pricing inefficiencies in predictio
 
 **100% free to run** - No paid APIs, no subscriptions. All data sources are free. Kalshi API key optional for Kalshi markets.
 
+> **Fork note.** Imported from [suislanchez/polymarket-kalshi-weather-bot](https://github.com/suislanchez/polymarket-kalshi-weather-bot) (MIT). Changes to the weather strategy:
+> - Forecasts are taken at the settlement station (e.g. Central Park for Kalshi NYC, LaGuardia for Polymarket NYC) instead of downtown coordinates.
+> - Daily highs/lows cover the actual settlement day: local *standard* time for Kalshi (NWS climate report), local civil day for Polymarket. The original used UTC days.
+> - Contracts are modelled as whole-degree intervals. Kalshi `B` tickers are 2°F buckets, not "above" thresholds. Polymarket "between X-Y", "or higher", "or below" and exact-degree questions are parsed.
+> - Probabilities come from a Gaussian-dressed ensemble (`WEATHER_MEMBER_SIGMA_F`, default 2°F).
+> - Edges use executable ask prices for both YES and NO, net of Kalshi taker fees (`KALSHI_FEE_RATE`).
+> - Fixed: "below" being read as a daily-low market, the "la" alias matching Atlanta/Dallas, and Kalshi weather trades being stored as Polymarket (so they never settled).
+>
+> Settlement stations change: confirm each contract's rules before trading. Run the tests with `python -m pytest tests`.
+
 ## Overview
 
 ### Strategy 1: BTC 5-Minute Up/Down

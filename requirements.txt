@@ -30,4 +30,5 @@ structlog>=24.1.0
 
 # Utils
 python-dotenv==1.0.0
+tzdata>=2024.1  # zoneinfo data on hosts without system tz database
 orjson==3.9.10

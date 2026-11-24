@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     WEATHER_MAX_ENTRY_PRICE: float = 0.70
     WEATHER_MAX_TRADE_SIZE: float = 100.0
     WEATHER_CITIES: str = "nyc,chicago,miami,los_angeles,denver"
+    # Gaussian width (F) used to "dress" each ensemble member. Smooths the
+    # 31-member distribution over 1-2F buckets and widens the raw GFS
+    # ensemble, which is typically under-dispersed. Tune via backtest.
+    WEATHER_MEMBER_SIGMA_F: float = 2.0
+    # Kalshi taker fee ~ rate * P * (1 - P) per $1 contract
+    KALSHI_FEE_RATE: float = 0.07
 
     class Config:
         env_file = ".env"
